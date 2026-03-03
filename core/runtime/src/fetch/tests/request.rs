@@ -195,7 +195,7 @@ fn fetch_rejects_when_signal_preaborted() {
                 .unwrap()
                 .await_blocking(ctx)
                 .unwrap_err();
-            assert!(err.to_string().contains("AbortError"));
+            assert!(err.to_string().contains("The operation was aborted"));
         }),
     ]);
 }
@@ -220,7 +220,34 @@ fn fetch_rejects_when_signal_aborted_during_fetch() {
                 .unwrap()
                 .await_blocking(ctx)
                 .unwrap_err();
-            assert!(err.to_string().contains("AbortError"));
+            assert!(err.to_string().contains("The operation was aborted"));
+        }),
+    ]);
+}
+
+#[test]
+fn fetch_rejects_when_signal_reused() {
+    run_test_actions([
+        TestAction::inspect_context(|ctx| {
+            crate::fetch::register(TestFetcher::default(), None, ctx)
+                .expect("failed to register fetch");
+        }),
+        TestAction::run(
+            r#"
+                const controller = new AbortController();
+                controller.abort();
+                globalThis.p1 = fetch("http://unit.test", { signal: controller.signal });
+                globalThis.p2 = fetch("http://unit.test", { signal: controller.signal });
+            "#,
+        ),
+        TestAction::inspect_context(|ctx| {
+            let p1 = ctx.global_object().get(js_str!("p1"), ctx).unwrap();
+            let err = p1.as_promise().unwrap().await_blocking(ctx).unwrap_err();
+            assert!(err.to_string().contains("The operation was aborted"));
+
+            let p2 = ctx.global_object().get(js_str!("p2"), ctx).unwrap();
+            let err = p2.as_promise().unwrap().await_blocking(ctx).unwrap_err();
+            assert!(err.to_string().contains("The operation was aborted"));
         }),
     ]);
 }

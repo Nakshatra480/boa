@@ -27,6 +27,7 @@ impl RuntimeExtension for TimeoutExtension {
     }
 }
 
+/// Register the `AbortController` and `AbortSignal` classes.
 #[derive(Copy, Clone, Debug)]
 pub struct AbortExtension;
 

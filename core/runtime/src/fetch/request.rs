@@ -150,10 +150,12 @@ impl JsRequest {
         self.inner.uri()
     }
 
+    /// Get the `AbortSignal` associated with this request, if any.
     pub fn signal_value(&self) -> Option<AbortSignal> {
         self.signal.clone()
     }
 
+    /// Create a `JsRequest` from an HTTP request and an optional abort signal.
     pub fn from_parts(inner: HttpRequest<Vec<u8>>, signal: Option<AbortSignal>) -> Self {
         Self { inner, signal }
     }
@@ -181,7 +183,7 @@ impl JsRequest {
                     .map_err(|_| js_error!(Error: "Cannot construct request"))?
             }
             Either::Right(r) => {
-                signal = r.signal.clone();
+                signal.clone_from(&r.signal);
                 r.into_inner()
             }
         };
@@ -236,6 +238,10 @@ impl JsRequest {
         JsRequest::create_from_js(input, options)
     }
 
+    /// Get the signal associated with this request.
+    ///
+    /// # Errors
+    /// Returns an error if the signal object cannot be created.
     #[boa(getter)]
     pub fn signal(&self, context: &mut boa_engine::Context) -> JsResult<JsValue> {
         if let Some(signal) = self.signal.as_ref() {
