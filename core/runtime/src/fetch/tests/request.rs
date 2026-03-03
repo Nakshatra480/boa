@@ -2,9 +2,11 @@ use super::TestFetcher;
 use crate::fetch::request::JsRequest;
 use crate::fetch::response::JsResponse;
 use crate::test::{TestAction, run_test_actions};
-use boa_engine::{js_str, js_string};
+use boa_engine::{Context, Finalize, JsData, JsResult, JsValue, Trace, js_str, js_string};
 use either::Either;
 use http::{Response, Uri};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 #[test]
 fn request_constructor() {
@@ -149,6 +151,76 @@ fn request_clone_no_body_preserved() {
             let request_obj = request.as_object().unwrap();
             let request = request_obj.downcast_ref::<JsRequest>().unwrap();
             assert_eq!(request.inner().body().as_slice(), b"");
+        }),
+    ]);
+}
+
+#[derive(Debug, Clone, Trace, Finalize, JsData)]
+struct AbortOnFetchFetcher;
+
+impl crate::fetch::Fetcher for AbortOnFetchFetcher {
+    async fn fetch(
+        self: Rc<Self>,
+        request: JsRequest,
+        context: &RefCell<&mut Context>,
+    ) -> JsResult<JsResponse> {
+        if let Some(signal) = request.signal_value() {
+            signal.abort_with_reason(JsValue::undefined(), &mut context.borrow_mut())?;
+        }
+        Ok(JsResponse::basic(
+            "http://unit.test".into(),
+            Response::new(Vec::new()),
+        ))
+    }
+}
+
+#[test]
+fn fetch_rejects_when_signal_preaborted() {
+    run_test_actions([
+        TestAction::inspect_context(|ctx| {
+            crate::fetch::register(TestFetcher::default(), None, ctx)
+                .expect("failed to register fetch");
+        }),
+        TestAction::run(
+            r#"
+                const controller = new AbortController();
+                controller.abort();
+                globalThis.promise = fetch("http://unit.test", { signal: controller.signal });
+            "#,
+        ),
+        TestAction::inspect_context(|ctx| {
+            let promise = ctx.global_object().get(js_str!("promise"), ctx).unwrap();
+            let err = promise
+                .as_promise()
+                .unwrap()
+                .await_blocking(ctx)
+                .unwrap_err();
+            assert!(err.to_string().contains("AbortError"));
+        }),
+    ]);
+}
+
+#[test]
+fn fetch_rejects_when_signal_aborted_during_fetch() {
+    run_test_actions([
+        TestAction::inspect_context(|ctx| {
+            crate::fetch::register(AbortOnFetchFetcher, None, ctx)
+                .expect("failed to register fetch");
+        }),
+        TestAction::run(
+            r#"
+                const controller = new AbortController();
+                globalThis.promise = fetch("http://unit.test", { signal: controller.signal });
+            "#,
+        ),
+        TestAction::inspect_context(|ctx| {
+            let promise = ctx.global_object().get(js_str!("promise"), ctx).unwrap();
+            let err = promise
+                .as_promise()
+                .unwrap()
+                .await_blocking(ctx)
+                .unwrap_err();
+            assert!(err.to_string().contains("AbortError"));
         }),
     ]);
 }

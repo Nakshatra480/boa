@@ -4,6 +4,8 @@
 //!
 //! [mdn]: https://developer.mozilla.org/en-US/docs/Web/API/Request
 use super::HttpRequest;
+use crate::abort::AbortSignal;
+use boa_engine::class::Class;
 use boa_engine::value::{Convert, TryFromJs};
 use boa_engine::{
     Finalize, JsData, JsObject, JsResult, JsString, JsValue, Trace, boa_class, js_error,
@@ -53,6 +55,7 @@ pub struct RequestInit {
     body: Option<JsValue>,
     headers: Option<VecOrMap<JsString, Convert<JsString>>>,
     method: Option<Convert<JsString>>,
+    signal: Option<AbortSignal>,
 }
 
 impl RequestInit {
@@ -64,7 +67,8 @@ impl RequestInit {
     pub fn into_request_builder(
         mut self,
         request: Option<HttpRequest<Vec<u8>>>,
-    ) -> JsResult<HttpRequest<Vec<u8>>> {
+    ) -> JsResult<(HttpRequest<Vec<u8>>, Option<AbortSignal>)> {
+        let signal = self.signal.take();
         let mut builder = HttpRequest::builder();
         let mut request_body = Vec::new();
         if let Some(r) = request {
@@ -111,9 +115,10 @@ impl RequestInit {
             }
         }
 
-        builder
+        let request = builder
             .body(request_body)
-            .map_err(|_| js_error!(Error: "Cannot construct request"))
+            .map_err(|_| js_error!(Error: "Cannot construct request"))?;
+        Ok((request, signal))
     }
 }
 
@@ -126,6 +131,7 @@ impl RequestInit {
 pub struct JsRequest {
     #[unsafe_ignore_trace]
     inner: HttpRequest<Vec<u8>>,
+    signal: Option<AbortSignal>,
 }
 
 impl JsRequest {
@@ -144,6 +150,14 @@ impl JsRequest {
         self.inner.uri()
     }
 
+    pub fn signal_value(&self) -> Option<AbortSignal> {
+        self.signal.clone()
+    }
+
+    pub fn from_parts(inner: HttpRequest<Vec<u8>>, signal: Option<AbortSignal>) -> Self {
+        Self { inner, signal }
+    }
+
     /// Create a [`JsRequest`] instance from JavaScript arguments, similar to
     /// calling its constructor in JavaScript.
     ///
@@ -153,6 +167,7 @@ impl JsRequest {
         input: Either<JsString, JsRequest>,
         options: Option<RequestInit>,
     ) -> JsResult<Self> {
+        let mut signal = None;
         let request = match input {
             Either::Left(uri) => {
                 let uri = http::Uri::try_from(
@@ -165,21 +180,33 @@ impl JsRequest {
                     .body(Vec::<u8>::new())
                     .map_err(|_| js_error!(Error: "Cannot construct request"))?
             }
-            Either::Right(r) => r.into_inner(),
+            Either::Right(r) => {
+                signal = r.signal.clone();
+                r.into_inner()
+            }
         };
 
         if let Some(options) = options {
-            let inner = options.into_request_builder(Some(request))?;
-            Ok(Self { inner })
+            let (inner, options_signal) = options.into_request_builder(Some(request))?;
+            if options_signal.is_some() {
+                signal = options_signal;
+            }
+            Ok(Self { inner, signal })
         } else {
-            Ok(Self { inner: request })
+            Ok(Self {
+                inner: request,
+                signal,
+            })
         }
     }
 }
 
 impl From<HttpRequest<Vec<u8>>> for JsRequest {
     fn from(inner: HttpRequest<Vec<u8>>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            signal: None,
+        }
     }
 }
 
@@ -207,5 +234,14 @@ impl JsRequest {
             Either::Left(i) => Either::Left(i),
         };
         JsRequest::create_from_js(input, options)
+    }
+
+    #[boa(getter)]
+    pub fn signal(&self, context: &mut boa_engine::Context) -> JsResult<JsValue> {
+        if let Some(signal) = self.signal.as_ref() {
+            Ok(AbortSignal::from_data(signal.clone(), context)?.into())
+        } else {
+            Ok(JsValue::undefined())
+        }
     }
 }

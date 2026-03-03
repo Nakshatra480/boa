@@ -105,6 +105,7 @@
     clippy::let_unit_value
 )]
 
+pub mod abort;
 pub mod console;
 
 #[doc(inline)]
@@ -127,7 +128,8 @@ pub mod url;
 #[cfg(feature = "process")]
 use crate::extensions::ProcessExtension;
 use crate::extensions::{
-    EncodingExtension, MicrotaskExtension, StructuredCloneExtension, TimeoutExtension,
+    AbortExtension, EncodingExtension, MicrotaskExtension, StructuredCloneExtension,
+    TimeoutExtension,
 };
 pub use extensions::RuntimeExtension;
 
@@ -142,6 +144,7 @@ pub fn register(
     ctx: &mut boa_engine::Context,
 ) -> boa_engine::JsResult<()> {
     (
+        AbortExtension,
         TimeoutExtension,
         EncodingExtension,
         MicrotaskExtension,

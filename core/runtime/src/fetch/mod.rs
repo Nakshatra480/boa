@@ -7,6 +7,7 @@
 //! [spec]: https://fetch.spec.whatwg.org/
 //! [mdn]: https://developer.mozilla.org/en-US/docs/Web/API/fetch
 
+use crate::abort::{AbortSignal, abort_error};
 use crate::fetch::headers::JsHeaders;
 use crate::fetch::request::{JsRequest, RequestInit};
 use crate::fetch::response::JsResponse;
@@ -101,7 +102,7 @@ async fn fetch_inner<T: Fetcher>(
 
     // The resource parsing is complicated, so we parse it in Rust here (instead of relying on
     // `TryFromJs` and friends).
-    let request: Request<Vec<u8>> = match resource {
+    let (request, mut signal): (Request<Vec<u8>>, Option<AbortSignal>) = match resource {
         Either::Left(url) => {
             let url = url.to_std_string().map_err(JsError::from_rust)?;
             let url = fetcher
@@ -109,7 +110,7 @@ async fn fetch_inner<T: Fetcher>(
                 .map_err(JsError::from_rust)?;
 
             let r = HttpRequest::get(url).body(Vec::new());
-            r.map_err(JsError::from_rust)?
+            (r.map_err(JsError::from_rust)?, None)
         }
         Either::Right(request) => {
             // This can be a [`JsRequest`] object.
@@ -120,15 +121,26 @@ async fn fetch_inner<T: Fetcher>(
                 return Err(js_error!(TypeError: "Request object is already in use"));
             };
 
-            request_ref.data().inner().clone()
+            (
+                request_ref.data().inner().clone(),
+                request_ref.data().signal_value(),
+            )
         }
     };
 
     let mut request = if let Some(options) = options {
-        options.into_request_builder(Some(request))?
+        let (request, options_signal) = options.into_request_builder(Some(request))?;
+        if options_signal.is_some() {
+            signal = options_signal;
+        }
+        request
     } else {
         request
     };
+
+    if signal.as_ref().is_some_and(AbortSignal::is_aborted) {
+        return Err(abort_error());
+    }
 
     // Add the `Accept-Language` which should be automatically included, unless specified.
     if !request.headers().contains_key(
@@ -140,7 +152,12 @@ async fn fetch_inner<T: Fetcher>(
         request.headers_mut().append("Accept-Language", lang);
     }
 
-    let response = fetcher.fetch(JsRequest::from(request), context).await?;
+    let response = fetcher
+        .fetch(JsRequest::from_parts(request, signal.clone()), context)
+        .await?;
+    if signal.as_ref().is_some_and(AbortSignal::is_aborted) {
+        return Err(abort_error());
+    }
     let result = Class::from_data(response, &mut context.borrow_mut())?;
     Ok(result.into())
 }

@@ -27,6 +27,15 @@ impl RuntimeExtension for TimeoutExtension {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct AbortExtension;
+
+impl RuntimeExtension for AbortExtension {
+    fn register(self, realm: Option<Realm>, context: &mut Context) -> JsResult<()> {
+        crate::abort::register(realm, context)
+    }
+}
+
 /// Register the `queueMicrotask` function.
 #[derive(Copy, Clone, Debug)]
 pub struct MicrotaskExtension;
