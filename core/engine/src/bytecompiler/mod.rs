@@ -497,6 +497,11 @@ pub struct ByteCompiler<'ctx> {
     literals_map: FxHashMap<Literal, u32>,
     names_map: FxHashMap<Sym, u32>,
     bindings_map: FxHashMap<BindingLocator, u32>,
+
+    /// Cache of non-local `const` binding values in persistent registers.
+    /// Avoids repeated `GetName` environment lookups for immutable bindings.
+    const_binding_cache: FxHashMap<BindingLocator, u32>,
+
     jump_info: Vec<JumpControlInfo>,
 
     /// Used to handle exception throws that escape the async function types.
@@ -606,6 +611,7 @@ impl<'ctx> ByteCompiler<'ctx> {
             literals_map: FxHashMap::default(),
             names_map: FxHashMap::default(),
             bindings_map: FxHashMap::default(),
+            const_binding_cache: FxHashMap::default(),
             jump_info: Vec::new(),
             async_handler: None,
             json_parse,
@@ -1117,10 +1123,17 @@ impl<'ctx> ByteCompiler<'ctx> {
         Label { index }
     }
 
-    pub(crate) fn emit_jump_if_not_undefined(&mut self, value: &Register) -> Label {
+    pub(crate) fn jump_if_not_undefined(&mut self, value: &Register) -> Label {
         let index = self.next_opcode_location();
         self.bytecode
             .emit_jump_if_not_undefined(Self::DUMMY_ADDRESS, value.variable());
+        Label { index }
+    }
+
+    pub(crate) fn jump_if_neq(&mut self, lhs: &Register, rhs: &Register) -> Label {
+        let index = self.next_opcode_location();
+        self.bytecode
+            .emit_jump_if_not_equal(Self::DUMMY_ADDRESS, lhs.variable(), rhs.variable());
         Label { index }
     }
 
@@ -1170,12 +1183,46 @@ impl<'ctx> ByteCompiler<'ctx> {
         identifier.to_js_string(self.interner())
     }
 
+    fn super_(&mut self, this: &Register, super_: &Register) {
+        // Reuse super to avoid allocating a register just to get the function object.
+        self.bytecode.emit_this(this.variable());
+        self.bytecode.emit_get_function_object(super_.variable());
+        self.bytecode.emit_get_home_object(super_.variable());
+
+        let r1 = self.register_allocator.alloc();
+        self.bytecode.emit_push_null(r1.variable());
+        // jump to evaluation if `super` is already a valid home object.
+        let skip_move = self.jump_if_neq(&r1, super_);
+        self.bytecode.emit_move(r1.variable(), this.variable());
+        self.bytecode.emit_is_object(r1.variable());
+
+        // If `this` is also not an object, then `super` should be left as `null`.
+        // Jump to the end in this case because `super` is already `null`.
+        let skip_eval = self.jump_if_false(&r1);
+        self.register_allocator.dealloc(r1);
+
+        // `this` is an object, so replace `super` with it and get its
+        // prototype.
+        self.bytecode.emit_move(super_.variable(), this.variable());
+        self.patch_jump(skip_move);
+
+        self.bytecode.emit_get_prototype(super_.variable());
+
+        self.patch_jump(skip_eval);
+    }
+
     fn access_get(&mut self, access: Access<'_>, dst: &Register) {
         match access {
             Access::Variable { name } => {
                 let name = self.resolve_identifier_expect(name);
                 let binding = self.lexical_scope.get_identifier_reference(name);
                 let index = self.get_binding(&binding);
+                if !self.in_with
+                    && let Some(&cached_reg) = self.const_binding_cache.get(&binding.locator())
+                {
+                    self.bytecode.emit_move(dst.variable(), cached_reg.into());
+                    return;
+                }
                 self.emit_binding_access(BindingAccessOpcode::GetName, &index, dst);
             }
             Access::Property { access } => match access {
@@ -1221,8 +1268,8 @@ impl<'ctx> ByteCompiler<'ctx> {
 
                     let value = compiler.register_allocator.alloc();
                     let receiver = compiler.register_allocator.alloc();
-                    compiler.bytecode.emit_super(value.variable());
-                    compiler.bytecode.emit_this(receiver.variable());
+                    compiler.super_(&receiver, &value);
+
                     match access.field() {
                         PropertyAccessField::Const(ident) => {
                             compiler.emit_get_property_by_name(
@@ -1337,10 +1384,8 @@ impl<'ctx> ByteCompiler<'ctx> {
                 PropertyAccess::Super(access) => match access.field() {
                     PropertyAccessField::Const(name) => {
                         let object = self.register_allocator.alloc();
-                        self.bytecode.emit_super(object.variable());
-
                         let receiver = self.register_allocator.alloc();
-                        self.bytecode.emit_this(receiver.variable());
+                        self.super_(&receiver, &object);
 
                         let value = expr_fn(self);
 
@@ -1351,10 +1396,8 @@ impl<'ctx> ByteCompiler<'ctx> {
                     }
                     PropertyAccessField::Expr(expr) => {
                         let object = self.register_allocator.alloc();
-                        self.bytecode.emit_super(object.variable());
-
                         let receiver = self.register_allocator.alloc();
-                        self.bytecode.emit_this(receiver.variable());
+                        self.super_(&receiver, &object);
 
                         let key = self.register_allocator.alloc();
                         self.compile_expr(expr, &key);
@@ -1444,6 +1487,34 @@ impl<'ctx> ByteCompiler<'ctx> {
         self.compile_expr_impl(expr, dst);
     }
 
+    /// Compile an expression and return the operand where the result lives.
+    ///
+    /// For local variable references, this returns the local's persistent register
+    /// directly without emitting a `Move` instruction. For all other expressions,
+    /// it allocates a temporary register and compiles into it.
+    ///
+    /// The `inner_fn` passed in will be called before the register get deallocated.
+    pub(crate) fn compile_expr_operand(
+        &mut self,
+        expr: &Expression,
+        inner_fn: impl FnOnce(&mut Self, VaryingOperand),
+    ) {
+        if let Expression::Identifier(name) = expr {
+            let name = self.resolve_identifier_expect(*name);
+            let binding = self.lexical_scope.get_identifier_reference(name);
+            let index = self.get_binding(&binding);
+            if let BindingKind::Local(Some(local_reg)) = &index {
+                inner_fn(self, VaryingOperand::from(*local_reg));
+                return;
+            }
+        }
+        let reg = self.register_allocator.alloc();
+        self.compile_expr(expr, &reg);
+        let op = reg.variable();
+        inner_fn(self, op);
+        self.register_allocator.dealloc(reg);
+    }
+
     /// Compile a property access expression, prepending `this` to the property value in the stack.
     ///
     /// This compiles the access in a way that the state of the stack after executing the property
@@ -1490,8 +1561,7 @@ impl<'ctx> ByteCompiler<'ctx> {
             }
             PropertyAccess::Super(access) => {
                 let object = self.register_allocator.alloc();
-                self.bytecode.emit_this(this.variable());
-                self.bytecode.emit_super(object.variable());
+                self.super_(this, &object);
 
                 match access.field() {
                     PropertyAccessField::Const(ident) => {
@@ -1858,7 +1928,17 @@ impl<'ctx> ByteCompiler<'ctx> {
                                 .expect("const declaration must have initializer");
                             let value = self.register_allocator.alloc();
                             self.compile_expr(init, &value);
-                            self.emit_binding(BindingOpcode::InitLexical, ident, &value);
+                            self.emit_binding(BindingOpcode::InitLexical, ident.clone(), &value);
+                            // Cache non-local const bindings in a persistent register
+                            // so subsequent reads avoid GetName environment lookups.
+                            let binding = self.lexical_scope.get_identifier_reference(ident);
+                            if !binding.local() {
+                                let cache_reg = self.register_allocator.alloc_persistent();
+                                self.bytecode
+                                    .emit_move(cache_reg.variable(), value.variable());
+                                self.const_binding_cache
+                                    .insert(binding.locator(), cache_reg.index());
+                            }
                             self.register_allocator.dealloc(value);
                         }
                         Binding::Pattern(pattern) => {

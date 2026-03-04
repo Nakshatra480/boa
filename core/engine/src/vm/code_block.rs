@@ -13,6 +13,7 @@ use crate::{
 use bitflags::bitflags;
 use boa_ast::scope::{BindingLocator, Scope};
 use boa_gc::{Finalize, Gc, Trace, empty_trace};
+use itertools::Itertools;
 use std::{cell::Cell, fmt::Display, fmt::Write as _};
 use thin_vec::ThinVec;
 
@@ -350,8 +351,6 @@ impl CodeBlock {
             | Instruction::PushUndefined { dst }
             | Instruction::Exception { dst }
             | Instruction::This { dst }
-            | Instruction::Super { dst }
-            | Instruction::SuperCallPrepare { dst }
             | Instruction::NewTarget { dst }
             | Instruction::ImportMeta { dst }
             | Instruction::CreateMappedArgumentsObject { dst }
@@ -452,6 +451,9 @@ impl CodeBlock {
             | Instruction::LogicalOr { address, value }
             | Instruction::Coalesce { address, value } => {
                 format!("value:{value}, address:{address}")
+            }
+            Instruction::JumpIfNotEqual { address, lhs, rhs } => {
+                format!("lhs:{lhs}, rhs:{rhs}, address:{address}")
             }
             Instruction::Case {
                 address,
@@ -721,8 +723,14 @@ impl CodeBlock {
             Instruction::SetHomeObject { function, home } => {
                 format!("function:{function}, home:{home}")
             }
+            Instruction::GetHomeObject { function } => {
+                format!("function:{function}")
+            }
             Instruction::SetPrototype { object, prototype } => {
                 format!("object:{object}, prototype:{prototype}")
+            }
+            Instruction::GetPrototype { object } => {
+                format!("object:{object}")
             }
             Instruction::PushValueToArray { value, array } => {
                 format!("value:{value}, array:{array}")
@@ -817,17 +825,11 @@ impl CodeBlock {
             Instruction::TemplateLookup { address, site, dst } => {
                 format!("address:{address}, site:{site}, dst:{dst}")
             }
-            Instruction::JumpTable {
-                index,
-                default,
-                addresses,
-            } => {
-                let mut operands =
-                    format!("index:{index} #{}: Default: {default:4}", addresses.len());
-                for (i, address) in addresses.iter().enumerate() {
-                    let _ = write!(operands, ", {i}: {address}");
-                }
-                operands
+            Instruction::JumpTable { index, addresses } => {
+                format!(
+                    "index:{index}, jump_table:[{}]",
+                    addresses.iter().join(", ")
+                )
             }
             Instruction::ConcatToString { dst, values } => {
                 format!("dst:{dst}, values:{values:?}")
@@ -841,6 +843,9 @@ impl CodeBlock {
             }
             Instruction::TemplateCreate { site, dst, values } => {
                 format!("site:{site}, dst:{dst}, values:{values:?}")
+            }
+            Instruction::GetFunctionObject { function_object } => {
+                format!("function_object:{function_object}")
             }
             Instruction::Pop
             | Instruction::DeleteSuperThrow
@@ -915,9 +920,7 @@ impl CodeBlock {
             | Instruction::Reserved56
             | Instruction::Reserved57
             | Instruction::Reserved58
-            | Instruction::Reserved59
-            | Instruction::Reserved60
-            | Instruction::Reserved61 => unreachable!("Reserved opcodes are unreachable"),
+            | Instruction::Reserved59 => unreachable!("Reserved opcodes are unreachable"),
         }
     }
 }
