@@ -773,10 +773,12 @@ impl Context {
         ControlFlow::Continue(())
     }
 
+    /// Emits `CompletionRecord::Normal` to signal that the generator has yielded
+    /// (suspended), per ECMAScript spec §27.5.3.7 (GeneratorYield).
     fn handle_yield(&mut self) -> ControlFlow<CompletionRecord> {
         let result = self.vm.take_return_value();
         if self.vm.frame().exit_early() {
-            return ControlFlow::Break(CompletionRecord::Return(result));
+            return ControlFlow::Break(CompletionRecord::Normal(result));
         }
 
         self.vm.stack.push(result);
