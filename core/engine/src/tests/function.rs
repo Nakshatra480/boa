@@ -198,3 +198,50 @@ fn function_constructor_nested_lexical_binding() {
         42,
     )]);
 }
+
+/// Regression test for issue #2675 (sub-issue 2).
+/// `yield` must suspend the generator with `done: false`, and exhaustion
+/// must produce `done: true`.
+#[test]
+fn generator_yield_produces_values() {
+    run_test_actions([TestAction::assert(indoc! {r#"
+        function* gen() { yield 1; yield 2; }
+        var g = gen();
+        var a = g.next();
+        var b = g.next();
+        var c = g.next();
+        a.value === 1 && a.done === false &&
+        b.value === 2 && b.done === false &&
+        c.value === undefined && c.done === true
+    "#})]);
+}
+
+/// Regression test for issue #2675 (sub-issue 3).
+/// `return` inside a generator must mark the generator as completed
+/// (`done: true`) and carry the return value.
+#[test]
+fn generator_return_completes_generator() {
+    run_test_actions([TestAction::assert(indoc! {r#"
+        function* gen() { yield 1; return 42; }
+        var g = gen();
+        var a = g.next();
+        var b = g.next();
+        var c = g.next();
+        a.value === 1  && a.done === false &&
+        b.value === 42 && b.done === true  &&
+        c.value === undefined && c.done === true
+    "#})]);
+}
+
+/// Regression test for issue #2675 (sub-issue 3).
+/// A generator that returns immediately (no yields) must produce
+/// `{ value: 99, done: true }` on the first `.next()` call.
+#[test]
+fn generator_early_return() {
+    run_test_actions([TestAction::assert(indoc! {r#"
+        function* gen() { return 99; }
+        var g = gen();
+        var a = g.next();
+        a.value === 99 && a.done === true
+    "#})]);
+}
