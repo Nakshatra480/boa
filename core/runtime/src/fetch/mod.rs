@@ -52,6 +52,22 @@ pub trait Fetcher: NativeObject {
     /// Perform the Fetch execution, taking a [`request::JsRequest`] and returning a
     /// [`response::JsResponse`].
     ///
+    /// # Abort signal handling
+    /// The runtime checks `signal.is_aborted()` **before** and **after** this
+    /// method is called, but it does **not** cancel the future mid-flight.
+    /// For true async cancellation (e.g. dropping an in-progress HTTP
+    /// connection the moment `AbortController.abort()` is called),
+    /// implementations should:
+    ///
+    /// 1. Retrieve the signal via [`JsRequest::signal_value()`].
+    /// 2. Poll or check `AbortSignal::is_aborted()` at appropriate yield
+    ///    points during the network I/O.
+    /// 3. Return early with an abort error when the signal fires.
+    ///
+    /// If the implementation does not observe the signal, the request will
+    /// run to completion and the abort will only be detected after this
+    /// method returns.
+    ///
     /// # Errors
     /// Any errors returned by the HTTP implementation must conform to [`JsError`].
     #[expect(async_fn_in_trait, reason = "all our APIs are single-threaded")]
