@@ -65,3 +65,19 @@ fn dtf_basic() {
         TestAction::assert_eq("result === 'Sunday, 20 December 2020 at 14:23:16'", true),
     ]);
 }
+
+#[cfg(feature = "intl_bundled")]
+#[test]
+fn supported_locales_of() {
+    run_test_actions([
+        TestAction::assert_eq(
+            "typeof Intl.DateTimeFormat.supportedLocalesOf",
+            crate::js_string!("function"),
+        ),
+        TestAction::assert_eq(
+            "Intl.DateTimeFormat.supportedLocalesOf(['en-US', 'zz-ZZ']).join(',')",
+            crate::js_string!("en-US"),
+        ),
+        TestAction::assert_eq("Intl.DateTimeFormat.supportedLocalesOf([]).length", 0),
+    ]);
+}
