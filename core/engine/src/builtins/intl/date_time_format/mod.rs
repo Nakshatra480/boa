@@ -190,7 +190,7 @@ impl DateTimeFormat {
         // 3. Perform ? RequireInternalSlot(dtf, [[InitializedDateTimeFormat]]).
         let dtf_object = object.downcast::<Self>().map_err(|_| {
             JsNativeError::typ()
-                .with_message("the `this` object must be an initializedDateTimeFormat object")
+                .with_message("the `this` object must be an initialized DateTimeFormat object")
         })?;
         let dtf_clone = dtf_object.clone();
         let mut dtf = dtf_object.borrow_mut();
@@ -361,7 +361,7 @@ impl ToLocalTime {
     pub(crate) fn to_formattable_datetime(&self) -> DateTime<Iso> {
         DateTime {
             date: Date::try_new_iso(self.year, self.month, self.day)
-                .expect("TimeClip insures valid range."),
+                .expect("TimeClip ensures valid range."),
             time: Time::try_new(self.hour, self.minute, self.second, self.subsecond)
                 .expect("valid values"),
         }
