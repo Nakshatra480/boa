@@ -758,12 +758,6 @@ impl Context {
         self.handle_throw()
     }
 
-    /// Emits `CompletionRecord::Return` to signal that the function has
-    /// returned, per ECMAScript spec §14.4 (Return Statement).
-    ///
-    /// For generators, the drive loop interprets `Return` as `Completed`
-    /// (done: true). For non-generator host callers, `consume()` treats
-    /// `Normal` and `Return` identically, so this is safe in both contexts.
     fn handle_return(&mut self) -> ControlFlow<CompletionRecord> {
         let exit_early = self.vm.frame().exit_early();
         let frame = self.vm.frames.last().expect("frame must exist");
@@ -779,8 +773,6 @@ impl Context {
         ControlFlow::Continue(())
     }
 
-    /// Emits `CompletionRecord::Normal` to signal that the generator has yielded
-    /// (suspended), per ECMAScript spec §27.5.3.7 (`GeneratorYield`).
     fn handle_yield(&mut self) -> ControlFlow<CompletionRecord> {
         let result = self.vm.take_return_value();
         if self.vm.frame().exit_early() {

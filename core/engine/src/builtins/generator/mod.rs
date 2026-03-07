@@ -250,7 +250,6 @@ impl Generator {
         )
     }
 
-    /// `GeneratorValidate ( generator, generatorBrand )`
     fn generator_validate(r#gen: &JsValue) -> JsResult<JsObject> {
         r#gen.as_object().ok_or_else(|| {
             JsNativeError::typ()
@@ -259,7 +258,6 @@ impl Generator {
         })
     }
 
-    /// Shared completion dispatch for `GeneratorResume` and `GeneratorResumeAbrupt`.
     fn handle_resumption_result(
         state: &mut GeneratorState,
         record: CompletionRecord,

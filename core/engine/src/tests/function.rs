@@ -199,9 +199,6 @@ fn function_constructor_nested_lexical_binding() {
     )]);
 }
 
-/// Regression test for issue #2675 (sub-issue 2).
-/// `yield` must suspend the generator with `done: false`, and exhaustion
-/// must produce `done: true`.
 #[test]
 fn generator_yield_produces_values() {
     run_test_actions([TestAction::assert(indoc! {r#"
@@ -216,9 +213,6 @@ fn generator_yield_produces_values() {
     "#})]);
 }
 
-/// Regression test for issue #2675 (sub-issue 3).
-/// `return` inside a generator must mark the generator as completed
-/// (`done: true`) and carry the return value.
 #[test]
 fn generator_return_completes_generator() {
     run_test_actions([TestAction::assert(indoc! {r#"
@@ -233,9 +227,6 @@ fn generator_return_completes_generator() {
     "#})]);
 }
 
-/// Regression test for issue #2675 (sub-issue 3).
-/// A generator that returns immediately (no yields) must produce
-/// `{ value: 99, done: true }` on the first `.next()` call.
 #[test]
 fn generator_early_return() {
     run_test_actions([TestAction::assert(indoc! {r#"
